@@ -1,0 +1,64 @@
+#include <iostream>
+#include <fstream>
+#include <string>
+#include <WinSock2.h>
+#include <WS2tcpip.h> // For inet_pton
+
+#pragma comment(lib, "Ws2_32.lib")
+
+void initializeWinsock() {
+    WSADATA wsaData;
+    int iResult = WSAStartup(MAKEWORD(2, 2), &wsaData);
+    if (iResult != 0) {
+        std::cerr << "WSAStartup failed: " << iResult << std::endl;
+        exit(1);
+    }
+}
+
+void udpClient(const std::string& serverIp, int serverPort) {
+    initializeWinsock();
+
+    SOCKET sendSocket = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+    if (sendSocket == INVALID_SOCKET) {
+        std::cerr << "Error at socket(): " << WSAGetLastError() << std::endl;
+        WSACleanup();
+        exit(1);
+    }
+
+    sockaddr_in serverAddr;
+    serverAddr.sin_family = AF_INET;
+    inet_pton(AF_INET, serverIp.c_str(), &serverAddr.sin_addr);
+    serverAddr.sin_port = htons(serverPort);
+
+    std::ifstream inputFile("trajectory_data.txt");
+    if (!inputFile.is_open()) {
+        std::cerr << "Failed to open trajectory_data.txt" << std::endl;
+        closesocket(sendSocket);
+        WSACleanup();
+        exit(1);
+    }
+
+    std::string line;
+    while (std::getline(inputFile, line)) {
+        // Send each line as a UDP packet
+        if (sendto(sendSocket, line.c_str(), static_cast<int>(line.size()), 0, (sockaddr*)&serverAddr, sizeof(serverAddr)) == SOCKET_ERROR) {
+            std::cerr << "Send failed: " << WSAGetLastError() << std::endl;
+            break;
+        }
+        std::cout << "Sent: " << line << std::endl;
+        Sleep(100); // Add a short delay between sends
+    }
+
+    inputFile.close();
+    closesocket(sendSocket);
+    WSACleanup();
+}
+
+int main() {
+    std::string serverIp = "127.0.0.1"; // Replace with your server IP
+    int serverPort = 54000; // Replace with your server port
+
+    udpClient(serverIp, serverPort);
+
+    return 0;
+}

@@ -1,0 +1,114 @@
+void udpServer(int listenPort, sf::RenderWindow& windowX, sf::RenderWindow& windowY, sf::RenderWindow& windowZ, sf::RenderWindow& windowCombined) {
+    initializeWinsock();
+
+    SOCKET recvSocket = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+    if (recvSocket == INVALID_SOCKET) {
+        std::cerr << "Error at socket(): " << WSAGetLastError() << std::endl;
+        WSACleanup();
+        exit(1);
+    }
+
+    sockaddr_in serverAddr;
+    serverAddr.sin_family = AF_INET;
+    serverAddr.sin_port = htons(listenPort);
+    serverAddr.sin_addr.s_addr = INADDR_ANY;
+
+    if (bind(recvSocket, (sockaddr*)&serverAddr, sizeof(serverAddr)) == SOCKET_ERROR) {
+        std::cerr << "Bind failed: " << WSAGetLastError() << std::endl;
+        closesocket(recvSocket);
+        WSACleanup();
+        exit(1);
+    }
+
+    sf::VertexArray trajectoryX(sf::LinesStrip);
+    sf::VertexArray trajectoryY(sf::LinesStrip);
+    sf::VertexArray trajectoryZ(sf::LinesStrip);
+    sf::VertexArray trajectoryCombined(sf::LinesStrip); // Combined trajectory
+
+    char recvBuffer[512];
+    int addrSize = sizeof(serverAddr);
+
+    while (windowX.isOpen() && windowY.isOpen() && windowZ.isOpen() && windowCombined.isOpen()) {
+        int bytesReceived = recvfrom(recvSocket, recvBuffer, sizeof(recvBuffer) - 1, 0, (sockaddr*)&serverAddr, &addrSize);
+        if (bytesReceived == SOCKET_ERROR) {
+            std::cerr << "Recv failed: " << WSAGetLastError() << std::endl;
+            break;
+        }
+        recvBuffer[bytesReceived] = '\0';
+
+        std::string receivedData(recvBuffer);
+        std::cout << "Received: " << receivedData << std::endl;
+
+        if (receivedData.size() > 3 && receivedData[0] == 'T' && receivedData[1] == '(' && receivedData.back() == ')') {
+            float x, y, z;
+            sscanf_s(receivedData.c_str(), "T(%f,%f,%f)", &x, &y, &z);
+
+            if (x >= 0 && x <= windowX.getSize().x && y >= 0 && y <= windowY.getSize().y && z >= 0 && z <= windowZ.getSize().y) {
+                std::cout << "Parsed values: x = " << x << ", y = " << y << ", z = " << z << std::endl;
+
+                // Update trajectories
+                sf::Vector2f pointX(x, y);
+                sf::Vector2f pointY(x, z);
+                sf::Vector2f pointZ(y, z);
+
+                trajectoryX.append(sf::Vertex(pointX));
+                trajectoryY.append(sf::Vertex(pointY));
+                trajectoryZ.append(sf::Vertex(pointZ));
+
+                // Calculate combined track (simple average in this case)
+                sf::Vector2f pointCombined((x + y + z) / 3.0f, (x + y + z) / 3.0f);
+                trajectoryCombined.append(sf::Vertex(pointCombined));
+
+                // Draw in respective windows
+                windowX.clear();
+                drawGrid(windowX, 'X'); // Draw X axis
+                for (std::size_t i = 1; i < trajectoryX.getVertexCount(); ++i) {
+                    drawArrow(windowX, trajectoryX[i - 1].position, trajectoryX[i].position);
+                }
+                windowX.display();
+
+                windowY.clear();
+                drawGrid(windowY, 'Y'); // Draw Y axis
+                for (std::size_t i = 1; i < trajectoryY.getVertexCount(); ++i) {
+                    drawArrow(windowY, trajectoryY[i - 1].position, trajectoryY[i].position);
+                }
+                windowY.display();
+
+                windowZ.clear();
+                drawGrid(windowZ, 'Z'); // Draw Z axis
+                for (std::size_t i = 1; i < trajectoryZ.getVertexCount(); ++i) {
+                    drawArrow(windowZ, trajectoryZ[i - 1].position, trajectoryZ[i].position);
+                }
+                windowZ.display();
+
+                windowCombined.clear();
+                drawGrid(windowCombined, 'C'); // Draw combined axis
+                for (std::size_t i = 1; i < trajectoryCombined.getVertexCount(); ++i) {
+                    drawArrow(windowCombined, trajectoryCombined[i - 1].position, trajectoryCombined[i].position);
+                }
+                windowCombined.display();
+
+                std::cout << "Trajectories updated." << std::endl;
+            }
+            else {
+                std::cerr << "Parsed values out of bounds: x = " << x << ", y = " << y << ", z = " << z << std::endl;
+            }
+        }
+        else {
+            std::cerr << "Invalid data format: " << receivedData << std::endl;
+        }
+
+        sf::Event event;
+        while (windowX.pollEvent(event) || windowY.pollEvent(event) || windowZ.pollEvent(event) || windowCombined.pollEvent(event)) {
+            if (event.type == sf::Event::Closed) {
+                windowX.close();
+                windowY.close();
+                windowZ.close();
+                windowCombined.close();
+            }
+        }
+    }
+
+    closesocket(recvSocket);
+    WSACleanup();
+}

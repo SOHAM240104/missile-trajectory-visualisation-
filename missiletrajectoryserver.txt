@@ -1,0 +1,158 @@
+#include <SFML/Graphics.hpp>
+#include <iostream>
+#include <WinSock2.h>
+#include <WS2tcpip.h> // For inet_pton
+#include <cmath> // Include cmath for math constants and functions
+
+// Define M_PI if it's not already defined
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
+
+void initializeWinsock() {
+    WSADATA wsaData;
+    int iResult = WSAStartup(MAKEWORD(2, 2), &wsaData);
+    if (iResult != 0) {
+        std::cerr << "WSAStartup failed: " << iResult << std::endl;
+        exit(1);
+    }
+}
+
+
+void drawGrid(sf::RenderWindow& window) {
+    // Draw horizontal lines
+    for (int y = 0; y <= window.getSize().y; y += 50) {
+        sf::Vertex line[] = {
+            sf::Vertex(sf::Vector2f(0, static_cast<float>(y))),
+            sf::Vertex(sf::Vector2f(static_cast<float>(window.getSize().x), static_cast<float>(y)))
+        };
+        window.draw(line, 2, sf::Lines);
+    }
+
+    // Draw vertical lines
+    for (int x = 0; x <= window.getSize().x; x += 50) {
+        sf::Vertex line[] = {
+            sf::Vertex(sf::Vector2f(static_cast<float>(x), 0)),
+            sf::Vertex(sf::Vector2f(static_cast<float>(x), static_cast<float>(window.getSize().y)))
+        };
+        window.draw(line, 2, sf::Lines);
+    }
+}
+
+void drawArrow(sf::RenderWindow& window, const sf::Vector2f& start, const sf::Vector2f& end) {
+    // Calculate arrow direction and length
+    sf::Vector2f dir = end - start;
+    float length = std::sqrt(dir.x * dir.x + dir.y * dir.y);
+    dir /= length;
+
+    // Arrow properties
+    const float arrowLength = 10.0f;
+    const float arrowAngle = 30.0f; // in degrees
+
+    // Draw line segment
+    sf::Vertex line[] = {
+        sf::Vertex(start),
+        sf::Vertex(end)
+    };
+    window.draw(line, 2, sf::Lines);
+
+    // Draw arrow head
+    sf::Vector2f arrowP1 = end - arrowLength * dir;
+    sf::Vector2f arrowP2 = end - arrowLength * dir + arrowLength * sf::Vector2f(std::cos(arrowAngle * M_PI / 180 + std::atan2(dir.y, dir.x)), std::sin(arrowAngle * M_PI / 180 + std::atan2(dir.y, dir.x)));
+    sf::Vector2f arrowP3 = end - arrowLength * dir + arrowLength * sf::Vector2f(std::cos(-arrowAngle * M_PI / 180 + std::atan2(dir.y, dir.x)), std::sin(-arrowAngle * M_PI / 180 + std::atan2(dir.y, dir.x)));
+
+    sf::ConvexShape arrow;
+    arrow.setPointCount(3);
+    arrow.setPoint(0, arrowP1);
+    arrow.setPoint(1, arrowP2);
+    arrow.setPoint(2, arrowP3);
+    arrow.setFillColor(sf::Color::Red);
+
+    window.draw(arrow);
+}
+
+void udpServer(int listenPort, sf::RenderWindow& window) {
+    initializeWinsock();
+
+    SOCKET recvSocket = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+    if (recvSocket == INVALID_SOCKET) {
+        std::cerr << "Error at socket(): " << WSAGetLastError() << std::endl;
+        WSACleanup();
+        exit(1);
+    }
+
+    sockaddr_in serverAddr;
+    serverAddr.sin_family = AF_INET;
+    serverAddr.sin_port = htons(listenPort);
+    serverAddr.sin_addr.s_addr = INADDR_ANY;
+
+    if (bind(recvSocket, (sockaddr*)&serverAddr, sizeof(serverAddr)) == SOCKET_ERROR) {
+        std::cerr << "Bind failed: " << WSAGetLastError() << std::endl;
+        closesocket(recvSocket);
+        WSACleanup();
+        exit(1);
+    }
+
+    sf::VertexArray trajectory(sf::LinesStrip);
+
+    char recvBuffer[512];
+    int addrSize = sizeof(serverAddr);
+
+    while (window.isOpen()) {
+        int bytesReceived = recvfrom(recvSocket, recvBuffer, sizeof(recvBuffer) - 1, 0, (sockaddr*)&serverAddr, &addrSize);
+        if (bytesReceived == SOCKET_ERROR) {
+            std::cerr << "Recv failed: " << WSAGetLastError() << std::endl;
+            break;
+        }
+        recvBuffer[bytesReceived] = '\0';
+
+        std::string receivedData(recvBuffer);
+        std::cout << "Received: " << receivedData << std::endl;
+
+        if (receivedData.size() > 3 && receivedData[0] == 'T' && receivedData[1] == '(' && receivedData.back() == ')') {
+            float x, y, z;
+            sscanf_s(receivedData.c_str(), "T(%f,%f,%f)", &x, &y, &z);
+
+            if (x >= 0 && x <= window.getSize().x && y >= 0 && y <= window.getSize().y) {
+                std::cout << "Parsed values: x = " << x << ", y = " << y << ", z = " << z << std::endl;
+                sf::Vector2f point(x, y);
+                trajectory.append(sf::Vertex(point));
+
+                window.clear();
+                drawGrid(window);
+                for (std::size_t i = 1; i < trajectory.getVertexCount(); ++i) {
+                    drawArrow(window, trajectory[i - 1].position, trajectory[i].position);
+                }
+                window.display();
+                std::cout << "Trajectory updated." << std::endl;
+            }
+            else {
+                std::cerr << "Parsed values out of bounds: x = " << x << ", y = " << y << std::endl;
+            }
+        }
+        else {
+            std::cerr << "Invalid data format: " << receivedData << std::endl;
+        }
+
+        sf::Event event;
+        while (window.pollEvent(event)) {
+            if (event.type == sf::Event::Closed) {
+                window.close();
+            }
+        }
+    }
+
+    closesocket(recvSocket);
+    WSACleanup();
+}
+
+int main() {
+    int listenPort = 54000; // Replace with your listen port
+
+    sf::RenderWindow window(sf::VideoMode(800, 600), "Missile Trajectory");
+    window.setFramerateLimit(60);
+
+    udpServer(listenPort, window);
+
+    return 0;
+}
